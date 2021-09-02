@@ -1,0 +1,148 @@
+theory ex_b_conjunction
+begin
+
+/*
+  The prover knows the corresponding secret keys to two encrypted values
+*/
+
+builtins: symmetric-encryption
+
+functions: zkp/6,
+           verifyZkp/2,
+           trueZkp/0,
+           pubParams1/1,
+           pubParams2/1
+equations: verifyZkp(crs, zkp(crs, senc(m1, sk1), senc(m2, sk2), sk1, sk2, r)) = trueZkp,
+           pubParams1(zkp(crs, x1, x2, w1, w2, r)) = x1,
+           pubParams2(zkp(crs, x1, x2, w1, w2, r)) = x2
+
+//----------------------------------------------------------------------------------------
+// Set up public-private key pair
+//----------------------------------------------------------------------------------------
+
+rule generate_secretKey:
+	[ Fr(~sk) ]
+  --[ HonestKey($A, ~sk) ]->
+	[ !SecretKey($A, ~sk) ]
+  	
+rule reveal_secretKey:
+	[ !SecretKey(A, sk) ]
+  --[ Reveal(A) ]->
+	[ Out(sk) ]
+
+//----------------------------------------------------------------------------------------
+// Generation of crs
+//----------------------------------------------------------------------------------------
+
+rule generate_crs:
+    [ Fr(~crs) ]
+  --[ HonestCRS(~crs) ]->
+    [ Out(~crs) ]
+    
+//----------------------------------------------------------------------------------------
+// Protocol initialization
+//----------------------------------------------------------------------------------------
+
+rule Init_P:
+	[ Fr(~id),
+	  !SecretKey(P, sk1),
+	  !SecretKey(P, sk2) ]
+  --[ Init_P(),
+      Create_P(P, ~id),
+      KnowsWitness(P, <sk1, sk2>) ]->
+	[ St_P_1(P, ~id, sk1, sk2) ]
+  
+rule Init_V:
+	[ Fr(~id) ]
+  --[ Init_V(),
+      Create_V($V, ~id) ]->
+	[ St_V_1($V, ~id) ]
+
+//----------------------------------------------------------------------------------------
+// Protocol
+//----------------------------------------------------------------------------------------
+
+// 1. Prover
+
+rule P_1:
+	[ St_P_1(P, id, sk1, sk2),
+	  Fr(~m1),
+	  Fr(~m2),
+	  Fr(~r),
+    In(crs) ]
+  --[ CreatedZkp(P, <sk1, sk2>, crs),
+      Honest(P) ]->
+	[ Out(zkp(crs, senc(~m1, sk1), senc(~m2, sk2), sk1, sk2, ~r)) ]
+
+// 2. Verifier
+
+rule V_1:
+	[ St_V_1(V, id),
+    In(crs),
+	  In(zkp(crs, senc(m1, sk1), senc(m2, sk2), sk1, sk2, r)) ]
+  --[ ReceivedZkp(V, id, <sk1, sk2>, crs),
+      Eq(verifyZkp(crs, zkp(crs, senc(m1, sk1), senc(m2, sk2), sk1, sk2, r)), trueZkp),
+      VerifiedZkp(V, id, <sk1, sk2>, crs),
+      Finish(V, id),
+      Honest(V) ]->
+	[]
+
+
+//----------------------------------------------------------------------------------------
+// Restrictions
+//----------------------------------------------------------------------------------------
+  
+restriction Equality:
+  "All x y #i. Eq(x, y)@i ==> x = y"  
+
+//----------------------------------------------------------------------------------------
+// Lemmas
+//----------------------------------------------------------------------------------------
+
+// 0. Protocol is executable
+lemma executable:
+  exists-trace
+    "
+     // A ZKP of honest keys can be verified
+       (Ex P V id #i1 #i2 #i3 #i4 #i5 sk1 sk2 crs. HonestCRS(crs)@i1 & HonestKey(P, sk1)@i2 & HonestKey(P, sk2)@i3 & CreatedZkp(P, <sk1, sk2>, crs)@i4 & VerifiedZkp(V, id, <sk1, sk2>, crs)@i5 & i4 < i5 & not sk1=sk2)
+     // Both P and V are only initiated once
+     & (All #i #j. Init_P()@i & Init_P()@j ==> #i = #j)
+     & (All #i #j. Init_V()@i & Init_V()@j ==> #i = #j)
+     // Protocol is executed between two parties
+     & (Ex A B idA idB #i #j. Create_P(A, idA)@i & Create_V(B, idB)@j & not A=B)
+     // The secret key of P was not compromised
+     & not (Ex A idA #i #j. Create_P(A, idA)@i & Reveal(A)@j)
+    "
+
+// 1. Soundness: P cannot trick V into verifying a false statement
+lemma soundness:
+  "
+   All V id #i1 #i2 sk1 sk2 crs.
+   VerifiedZkp(V, id, <sk1, sk2>, crs)@i1 & HonestCRS(crs)@i2
+     ==> ( Ex P #j. KnowsWitness(P, <sk1, sk2>)@j )
+    | ( Ex #j1 #j2. KU(sk1)@j1 & KU(sk2)@j2 )
+    | ( Ex P #j. Reveal(P)@j )
+  " 
+
+// 2. Completeness: V will always verify a true statement
+lemma completeness:
+  "
+   All V id sk1 sk2 #i1 #i2 #i3 crs.
+   ( Ex P #j. KnowsWitness(P, <sk1, sk2>)@j )
+    & ReceivedZkp(V, id, <sk1, sk2>, crs)@i1 & HonestCRS(crs)@i2 & Finish(V, id)@i3
+     ==> ( Ex #k. VerifiedZkp(V, id, <sk1, sk2>, crs)@k )
+  "
+
+// 3. Zero-knowledge:
+lemma zero_knowledge:
+  "
+   not(
+     Ex P sk1 sk2 crs #i1 #i2.
+          HonestCRS(crs)@i1 &
+          CreatedZkp(P, <sk1, sk2>, crs)@i2 &
+          ( (Ex #i. K(sk1)@i) | (Ex #i. K(sk2)@i) ) &
+          not (Ex #j. Reveal(P)@j)
+      )
+  "
+
+end

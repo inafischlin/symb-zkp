@@ -1,0 +1,151 @@
+theory ex_a_simple_aL
+begin
+
+builtins: asymmetric-encryption
+
+functions: pk/1,
+           zkp/3,
+           pubParams/1
+equations: pubParams(zkp(crs, x, r)) = x
+
+//----------------------------------------------------------------------------------------
+// Set up public-private key pair
+//----------------------------------------------------------------------------------------
+
+rule generate_asymKeyPair:
+	[ Fr(~skA) ]
+  --[ HonestKey($A, ~skA) ]->
+	[ !SecretKey($A, ~skA), !PubKey($A, pk(~skA)) ]
+  
+rule get_pubKey:
+	[ !PubKey(A, pk(skA)) ]
+  -->
+	[ Out(pk(skA)) ]
+	
+rule reveal_secretKey:
+	[ !SecretKey(A, skA) ]
+  --[ Reveal(A) ]->
+	[ Out(skA) ]
+
+//----------------------------------------------------------------------------------------
+// Generation of crs
+//----------------------------------------------------------------------------------------
+
+rule generate_crs:
+    [ Fr(~crs) ]
+  --[ HonestCRS(~crs) ]->
+    [ Out(~crs) ]
+    
+//----------------------------------------------------------------------------------------
+// Protocol initialization
+//----------------------------------------------------------------------------------------
+
+rule Init_P:
+	[ Fr(~id),
+	  !SecretKey(P, skP),
+	  !PubKey(P, pk(skP)) ]
+  --[ Init_P(),
+      Create_P(P, ~id) ]->
+	[ St_P_1(P, ~id, skP, pk(skP)) ]
+  
+rule Init_V:
+	[ Fr(~id) ]
+  --[ Init_V(),
+      Create_V($V, ~id) ]->
+	[ St_V_1($V, ~id) ]
+
+//----------------------------------------------------------------------------------------
+// Protocol
+//----------------------------------------------------------------------------------------
+
+// 1. Prover
+
+rule P_1:
+	[ St_P_1(P, id, skP, pk(skP)),
+	  Fr(~m),
+	  Fr(~r),
+	  In(crs) ]
+  --[ CreatedZkpForWitness(P, skP, crs),
+      Honest(P) ]->
+  [ Out(zkp(crs, aenc(~m, pk(skP)), ~r)) ]
+
+// 2. Verifier
+
+rule V_1:
+let
+  zkproof = zkp(crs, aenc(m, pk(skP)), r)
+in
+	[ St_V_1(V, id),
+	  In(crs),
+	  In(zkproof) ]
+  --[ ReceivedZkp(V, id, zkproof),
+      ValidZkp(crs, zkproof),
+      VerifiedZkpForWitness(V, skP, crs),
+      VerifiedZkp(V, id, zkproof),
+      Finish(V, id),
+      Honest(V) ]->
+	[]
+
+//----------------------------------------------------------------------------------------
+// Restrictions
+//----------------------------------------------------------------------------------------
+    
+restriction IsValidZkp:
+  "
+    All crs x r #i. ValidZkp(crs, zkp(crs, x, r))@i
+      ==> (Ex m w. x = aenc(m, pk(w)))
+  "
+
+//----------------------------------------------------------------------------------------
+// Lemmas
+//----------------------------------------------------------------------------------------
+
+// 0. Protocol is executable
+lemma executable:
+  exists-trace
+    "
+     // A ZKP of an honest key can be verified
+       (Ex P V #i1 #i2 #i3 #i4 skP crs.
+            HonestCRS(crs)@i1
+          & HonestKey(P, skP)@i2
+          & CreatedZkpForWitness(P, skP, crs)@i3
+          & VerifiedZkpForWitness(V, skP, crs)@i4
+          & i3 < i4)
+     // Both P and V are only initiated once
+     & (All #i #j. Init_P()@i & Init_P()@j ==> #i = #j)
+     & (All #i #j. Init_V()@i & Init_V()@j ==> #i = #j)
+     // Protocol is executed between two parties
+     & (Ex A B idA idB #i #j. Create_P(A, idA)@i & Create_V(B, idB)@j & not A=B)
+     // The secret key of P was not compromised
+     & not (Ex A idA #i #j. Create_P(A, idA)@i & Reveal(A)@j)
+    "
+
+// 1. Existential soundness
+lemma ex_soundness:
+  "
+    All V id #i1 #i2 x crs r.
+      VerifiedZkp(V, id, zkp(crs, x, r))@i1 & HonestCRS(crs)@i2
+        ==> (Ex m w. x = aenc(m, pk(w)))
+  "
+
+// 2. Completeness
+lemma completeness_alt:
+  "
+    All V id x crs r #i1 #i2 #i3.
+      (Ex m w. x = aenc(m, pk(w)))
+        & ReceivedZkp(V, id, zkp(crs, x, r))@i1 & HonestCRS(crs)@i2 & Finish(V, id)@i3
+        ==> (Ex #j. VerifiedZkp(V, id, zkp(crs, x, r))@j)
+  "
+
+// 3. Zero-knowledge
+lemma zero_knowledge_alt:
+  "
+    not(
+      Ex P w crs #i1 #i2 #i3. HonestCRS(crs)@i1
+                            & CreatedZkpForWitness(P, w, crs)@i2
+                            & K(w)@i3
+                            & not (Ex #j. Reveal(P)@j)
+    )
+  "
+
+end

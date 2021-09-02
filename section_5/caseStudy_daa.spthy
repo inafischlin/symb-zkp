@@ -1,0 +1,391 @@
+theory caseStudy_daa
+begin
+
+builtins: asymmetric-encryption, hashing
+
+functions: /* functions to model a blind signature scheme */
+           blind/2,
+           blindsign/2,
+           unblind/2,
+           blindver/3,
+           blindmsg/1,           
+           trueBlindSign/0,
+           /* functions specific to the protocol */
+           daa_exp/2,
+           daa_h/2,
+           /* functions to model the ZKPs */
+           zkp_join/7,
+           zkp_sign/8,
+           verifyZkp/2,
+           trueZkp/0,
+           pubParams1/1,
+           pubParams2/1,
+           pubParams3/1,
+           pubParams4/1
+equations: verifyZkp(crs, zkp_join(crs, blind(f,v), daa_exp(z, f), z, f, v, r)) = trueZkp,
+           verifyZkp(crs, zkp_sign(crs, daa_exp(zeta, f), zeta, pk(sk), m, f, unblind(blindsign(blind(f, v), sk), v), r)) = trueZkp,
+           pubParams1(zkp_join(crs, x, y, b, f, v, r)) = x,
+           pubParams2(zkp_join(crs, x, y, b, f, v, r)) = y,
+           pubParams3(zkp_join(crs, x, y, b, f, v, r)) = b,
+           pubParams1(zkp_sign(crs, x, y, s, m, f, cert, r)) = x,
+           pubParams2(zkp_sign(crs, x, y, s, m, f, cert, r)) = y,
+           pubParams3(zkp_sign(crs, x, y, s, m, f, cert, r)) = s,
+           pubParams4(zkp_sign(crs, x, y, s, m, f, cert, r)) = m,
+           blindver(unblind(blindsign(blind(f, v), sk), v), blind(f, v), pk(sk)) = trueBlindSign
+           
+           /*
+           In case the equation below is commented out, some lemmas no longer terminate.
+           We refer the reader to the last paragraph "Results" in section 5 of the accompanying thesis.
+           blindmsg(unblind(blindsign(blind(f, v), sk), v)) = f
+           */
+
+/* 
+Protocol to be modeled:
+-----------------------
+
+For a full specification, please refer to the accompanying thesis.
+
+(T: TPM, I: Issuer, V: Verifier (i.e. any other )
+
+T -> I: T, zkp_join( crs, blind(f,v), daa_exp(zetaI, f), zetaI, f, v, r )
+I -> T: aenc( nonce, pk(T) )
+T -> I: h( <nonce, blind(f, v)> )
+I -> T: blindsign( blind(f,v), sk(I) )
+T -> V: zkp_sign( crs, daa_exp(zeta, f), zeta, pk(skI), m, f, unblind(blindsign(blind(f, v), skI), v), r )
+      
+*/
+
+//----------------------------------------------------------------------------------------
+// Set up public-private key pair
+//----------------------------------------------------------------------------------------
+
+rule generate_asymKeyPair:
+	[ Fr(~skA) ]
+  --[ HonestKey($A, ~skA) ]->
+	[ !SecretKey($A, ~skA), !PubKey($A, pk(~skA)) ]
+  
+rule get_pubKey:
+	[ !PubKey(A, pk(skA)) ]
+  -->
+	[ Out(pk(skA)) ]
+
+//----------------------------------------------------------------------------------------
+// Generate f-value
+//----------------------------------------------------------------------------------------
+
+rule generate_seed:
+    [ Fr(~seed) ]
+  --[ HonestSecret($T, ~seed) ]->
+    [ !Seed($T, ~seed) ]
+    
+//----------------------------------------------------------------------------------------
+// Generate basename
+//----------------------------------------------------------------------------------------
+
+rule generate_basename:
+    [ Fr(~bsn) ]
+  --[ HonestBasename($A, ~bsn) ]->
+    [ !Basename($A, ~bsn) ]
+    
+rule get_basename:
+    [ !Basename(A, bsn) ]
+  -->
+    [ Out(bsn) ]
+	
+//----------------------------------------------------------------------------------------
+// Reveal an agent
+//----------------------------------------------------------------------------------------
+
+rule publish_certificate:
+    [ !Certificate(T, unblind(blindsign(blind(f, v), skI), v)) ]
+  --[ Reveal(T), RogueVal(f) ]->
+    [ Out(unblind(blindsign(blind(f, v), skI), v)), Out(f) ]
+
+rule publish_fValue:
+    [ !FValue(A, f) ]
+  --[ Reveal(A), RogueVal(f) ]->
+    [ Out(f) ]
+
+  rule detectedReveal_fValue [color=#9bf542]: 
+    [ !FValue(A, f) ]
+  --[ Reveal(A), RogueVal(f), RogueTPM(A) ]->
+    [ Out(f) ]
+
+  rule undetectedReveal_fValue [color=#f56042]:
+    [ !FValue(A, f) ]
+  --[ Reveal(A), UndectedRogueVal(f) ]->
+    [ Out(f) ]
+
+  rule detectedReveal_v [color=#9bf542]: 
+    [ !RandV(A, v) ]
+  --[ Reveal(A), RogueTPM(A) ]->
+    [ Out(v) ]
+
+  rule undetectedReveal_v [color=#f56042]:
+    [ !RandV(A, v) ]
+  --[ Reveal(A) ]->
+    [ Out(v) ]
+
+  rule detectedReveal_seedCnt [color=#9bf542]:
+    [ !Seed(T, seed), !Count(T, cnt) ]
+  --[ Reveal(T), RogueTPM(T), RogueVal(daa_h(seed, cnt)) ]->
+    [ Out(daa_h(seed, cnt)), Out(seed) ]
+
+  rule undetectedReveal_seedCnt [color=#f56042]:
+    [ !Seed(T, seed), !Count(T, cnt) ]
+  --[ Reveal(T), UndectedRogueVal(daa_h(seed, cnt)) ]->
+    [ Out(daa_h(seed, cnt)), Out(seed) ]
+
+  rule detectedReveal_secretKey [color=#9bf542]:
+    [ !SecretKey(A, skA) ]
+  --[ Reveal(A), RogueTPM(A) ]->
+    [ Out(skA) ]
+
+  rule undetectedReveal_secretKey [color=#f56042]:
+    [ !SecretKey(A, skA) ]
+  --[ Reveal(A) ]->
+    [ Out(skA) ]
+
+  rule dectedReveal_certificate [color=#9bf542]:
+    [ !Certificate(T, unblind(blindsign(blind(f, v), skI), v)) ]
+  --[ Reveal(T), RogueTPM(T), RogueVal(f) ]->
+    [ Out(unblind(blindsign(blind(f, v), skI), v)), Out(f) ]
+
+  rule undectedReveal_certificate [color=#f56042]:
+    [ !Certificate(T, unblind(blindsign(blind(f, v), skI), v)) ]
+  --[ Reveal(T) ]->
+    [ Out(unblind(blindsign(blind(f, v), skI), v)), Out(f) ]
+
+//----------------------------------------------------------------------------------------
+// Generation of crs
+//----------------------------------------------------------------------------------------
+
+rule generate_crs [color=#fc5386]:
+    [ Fr(~crs) ]
+  --[ HonestCRS(~crs) ]->
+    [ Out(~crs) ]
+    
+//----------------------------------------------------------------------------------------
+// Protocol initialization
+//----------------------------------------------------------------------------------------
+
+rule Init_TPM:
+	[ Fr(~id),
+	  !SecretKey($T, skT),
+	  !Seed($T, s) ]
+  --[ Init_T(),
+      Create_T($T, ~id) ]->
+	[ St_T_1($T, ~id, skT, s) ]
+  
+rule Init_Issuer:
+	[ Fr(~id),
+	  !Basename($I, bsnI) ]
+  --[ Init_I(),
+      Create_I($I, ~id) ]->
+	[ St_I_1($I, ~id, bsnI) ]
+
+rule Init_Verifier:
+    [ Fr(~id),
+      !Basename($V, bsnV) ]
+  --[ Init_V(),
+      Create_V($V, ~id) ]->
+    [ St_V_1($V, ~id, bsnV) ]
+
+//----------------------------------------------------------------------------------------
+// Protocol
+//----------------------------------------------------------------------------------------
+
+// 1. T -> I: T, zkp_join( crs, blind(f,v), daa_exp(zetaI, f), zetaI, f, v, r )
+rule T_1:
+let
+  zeta = h('cnst', bsnI)
+  f = daa_h(s, ~cnt)
+  zkproof = zkp_join(crs, blind(f, ~v), daa_exp(zeta, f), zeta, f, ~v, ~r)
+in
+    [ St_T_1(T, id, skT, s),
+      !Basename($I, bsnI),
+      In(crs),
+      Fr(~cnt),
+      Fr(~v),
+      Fr(~r) ]
+  --[ CreatedZkp('join', T, <f, ~v>),
+      KnowsWitness(T, <f, ~v>),
+      HonestSecret(T, f),
+      HonestSecret(T, ~v),
+      Honest(T) ]->
+    [ St_T_2(T, id, skT, s, crs, f, ~v, ~r, ~cnt),
+      Out(<T, zkproof>), !FValue(T, f), !RandV(T, ~v), !Count(T, ~cnt) ]
+      
+
+// 2. I -> T: aenc( nonce, pk(T) )
+rule I_1:
+let
+  zkproof = zkp_join(crs, blind(f, v), daa_exp(zeta, f), zeta, f, v, r)
+in
+    [ St_I_1(I, id, bsnI),
+      In(<T, zkproof>),
+      In(crs),
+      Fr(~nonce),
+      !PubKey(T, pk(skT)) ]
+  --[ ReceivedZkp(I, id, <f, v>, crs) ]->
+    [ St_I_2(I, id, bsnI, crs, ~nonce, T, pk(skT), zkproof),
+      Out(aenc(~nonce, pk(skT))) ]
+      
+// 3. T -> I: h( <nonce, blind(f, v)> )
+rule T_2:
+    [ St_T_2(T, id, skT, s, crs, f, v, r, cnt),
+      In(aenc(nonce, pk(skT))) ]
+  -->
+    [ St_T_3(T, id, skT, s, crs, f, v, r, cnt, nonce),
+      Out(h(nonce, blind(f,v))) ]
+
+// 4. I -> T: blindsign(blind(f,v), sk(I))
+rule I_2:
+let
+  zkproof = zkp_join(crs, blind(f, v), daa_exp(zeta, f), zeta, f, v, r)
+in
+    [ St_I_2(I, id, bsnI, crs, nonce, T, pk(skT), zkproof),
+      In(n),
+      !SecretKey(I, skI) ]
+  --[ Eq(verifyZkp(crs, zkproof), trueZkp),
+      Eq(h(nonce, blind(f,v)), n),
+      AcceptedJoinRequest(T),
+      VerifiedZkp(I, id, <f, v>, crs),
+      Honest(I),
+      Finish(I, id) ]->
+    [ Out(blindsign(blind(f,v), skI)) ]
+
+// 5. T -> V: zkp_sign( crs, daa_exp(zeta, f), zeta, pk(skI), m, f, unblind(blindsign(blind(f, v), skI), v), r )
+rule T_3:
+let
+  zeta = h('cnst', bsnV)
+  zkproof = zkp_sign(crs2, daa_exp(zeta, f), zeta, pk(skI), ~m, f, unblind(blindsign(blind(f, v), skI), v), r)
+  witness = <f, unblind(blindsign(blind(f, v), skI), v)>
+in
+    [ St_T_3(T, id, skT, s, crs, f, v, r, cnt, nonce),
+      Fr(~m),
+      In(crs2),
+      !PubKey($I, pk(skI)),
+      !Basename($V1, bsnV),
+      In(blindsign(blind(f,v), skI)) ]
+  --[ Eq(blindver(unblind(blindsign(blind(f, v), skI), v), blind(f, v), pk(skI)), trueBlindSign),
+      VerifiedCert(T, blindsign(blind(f, v), skI)),
+      HonestIssKey(skI),
+      Joined(T, f, unblind(blindsign(blind(f,v), skI), v)),
+      KnowsWitness(T, witness),
+      HonestSecret(T, unblind(blindsign(blind(f, v), skI), v)),
+      CreatedZkp('sign', T, witness),
+      Finish(T, id) ]->
+    [ Out(zkproof), !Certificate(T, unblind(blindsign(blind(f, v), skI), v)) ]
+
+// 6. Protocol completion
+rule V_1:
+let
+  zkproof = zkp_sign(crs, daa_exp(zeta, f), zeta, pk(skI), m, f, unblind(blindsign(blind(f, v1), skI), v1), r)
+  witness = <f, unblind(blindsign(blind(f, v1), skI), v1)>
+in
+    [ St_V_1(V, id, bsnV),
+      In(crs),
+      In(zkproof) ]
+  --[ ReceivedZkp(V, id, witness, crs),
+      Eq(verifyZkp(crs, zkproof), trueZkp),
+      HonestIssKey(skI),
+      VerifiedZkp(V, id, witness, crs),
+      AcceptedDAASig(f),
+      Honest(V),
+      Finish(V, id) ]->
+    []
+
+//----------------------------------------------------------------------------------------
+// Restrictions
+//----------------------------------------------------------------------------------------
+  
+restriction Equality:
+  "All x y #i. Eq(x, y)@i ==> x = y"  
+  
+restriction NotRogueTPM:
+  "All T #i. AcceptedJoinRequest(T)@i ==> not (Ex #j. RogueTPM(T)@j & j < i)"
+
+restriction NotRogueVal:
+  "All f #i. AcceptedDAASig(f)@i ==> not (Ex #j. RogueVal(f)@j & j < i)"
+
+restriction IsHonestIssuerKey:
+  "All skI #i. HonestIssKey(skI)@i ==> (Ex I #j. HonestKey(I, skI)@j)"
+
+//----------------------------------------------------------------------------------------
+// Lemmas
+//----------------------------------------------------------------------------------------
+
+// 0. Protocol is executable
+lemma executable:
+  exists-trace
+    "
+     // A ZKP of an honest prover regarding a secret s can be verified
+       (All P i s #i1 #i2. Honest(P)@i1 & CreatedZkp(i, P, s)@i2 ==> (Ex V id #i3 #i4 crs. HonestCRS(crs)@i3 & VerifiedZkp(V, id, s, crs)@i4) )
+     // All T, I and V are only initiated once
+     & (All #i #j. Init_T()@i & Init_T()@j ==> #i = #j)
+     & (All #i #j. Init_I()@i & Init_I()@j ==> #i = #j)
+     & (All #i #j. Init_V()@i & Init_V()@j ==> #i = #j)
+     // Protocol is executed between three parties (and not less)
+     & (Ex A B C idA idB idC #i1 #i2 #i3. Create_T(A, idA)@i1 & Create_I(B, idB)@i2 & Create_V(C, idC)@i3 & not A=B & not B=C & not A=C)
+     // All parties finished the protocol
+     & (Ex T I V idT idI idV #i1 #i2 #i3 #i4 #i5 #i6.
+            Create_T(T, idT)@i1 & Finish(T, idT)@i2
+          & Create_I(I, idI)@i3 & Finish(I, idI)@i4
+          & Create_V(V, idV)@i5 & Finish(V, idV)@i6)
+     // No TPM was compromised
+     & not (Ex A idA #i #j. Create_T(A, idA)@i & Reveal(A)@j)
+    "
+
+// 1. Soundness: P cannot trick V into verifying a false statement
+lemma soundness:
+  "
+   All V id #i1 #i2 s crs.
+   (VerifiedZkp(V, id, s, crs)@i1 & HonestCRS(crs)@i2
+     ==> ( Ex P #i. KnowsWitness(P, s)@i )
+       | ( Ex P #i. Reveal(P)@i )
+       | ( Ex #i. KU(s)@i ) )
+  " 
+
+// 2. Completeness: V will always verify a true statement
+lemma completeness:
+  "
+   All V s id #i1 #i2 #i3 crs.
+   ( Ex P #i. KnowsWitness(P, s)@i )
+         & ReceivedZkp(V, id, s, crs)@i1
+         & Finish(V, id)@i2
+         & HonestCRS(crs)@i3
+     ==> ( Ex #i. VerifiedZkp(V, id, s, crs)@i )
+  "
+
+// 3. Zero-knowledge:
+lemma zero_knowledge_join:
+  "
+    not(
+      Ex P w1 w2 #i1 #i2 crs. HonestCRS(crs)@i2
+                    & CreatedZkp('join', P, <w1,w2>)@i1
+                    & ( (Ex #i. K(w1)@i) | (Ex #i. K(w2)@i) )
+                    & not ( (Ex #j1. Reveal(P)@j1) | (Ex #j2. RogueVal(w1)@j2) )
+    )
+  "
+
+lemma zero_knowledge_sign:
+  "
+    not(
+      Ex P w1 w2 #i1 #i2 crs. HonestCRS(crs)@i2
+                    & CreatedZkp('sign', P, <w1,w2>)@i1
+                    & ( (Ex #i. K(w1)@i) | (Ex #i. K(w2)@i) )
+                    & not ( (Ex #j1. Reveal(P)@j1) | (Ex #j2. RogueVal(w1)@j2) )
+    )
+  "
+
+//----------------------------------------------------------------------------------------
+
+lemma authenticity:
+  "
+    All T f cert #i. Joined(T, f, cert)@i
+      ==> ( Ex #j. AcceptedJoinRequest(T)@j )
+  "
+
+end
+

@@ -1,0 +1,181 @@
+theory ex_limitation_1_r
+begin
+
+builtins: hashing
+
+/*
+  modeling witness relation
+    {(x1, x2, x3, w1, w2, w3) | ( x1 = h(w1) or x2 = h(w2) ) and ( x1 <> h(w1) or x3 = h(w3)}
+    
+    This yields the following assignment (whereas t_i stands for an arbitrary term t_i, which is not equal to h(wi)):
+    
+      (t_1  , t_2  , t_3  ) = false
+      (t_1  , t_2  , h(w3)) = false
+      (t_1  , h(w2), t_3  ) = true
+      (t_1  , h(w2), h(w3)) = true
+      (h(w1), t_2  , t_3  ) = false
+      (h(w1), t_2  , h(w3)) = true
+      (h(w1), h(w2), t_3  ) = false
+      (h(w1), h(w2), h(w3)) = true
+      
+    However, this is difficult to encode. If we add the evaluation to false, then everything
+    will evaluate to false. We therefore only add the equations for true.
+    
+    What we will attempt then is to break the evaluation from (t_1, h(w2), t_3) evaluating to true
+    by setting t_1 to h(w1) instead, which should evaluate to false. The theory is that
+    this will still evaluate to true, i.e. breaking the protocol.
+    
+*/
+
+functions: zkp/8,
+           pubParams1/1,
+           pubParams2/1,
+           pubParams3/1
+equations: pubParams1(zkp(crs, x1, x2, x3, w1, w2, w3, r)) = x1,
+           pubParams2(zkp(crs, x1, x2, x3, w1, w2, w3, r)) = x2,
+           pubParams3(zkp(crs, x1, x2, x3, w1, w2, w3, r)) = x3
+
+//----------------------------------------------------------------------------------------
+// Set up public-private key pair
+//----------------------------------------------------------------------------------------
+
+rule generate_witness:
+	[ Fr(~w) ]
+  --[ HonestWitness($A, ~w) ]->
+	[ !SecretWitness($A, ~w) ]
+  	
+rule reveal_witness:
+	[ !SecretWitness(A, w) ]
+  --[ Reveal(A) ]->
+	[ Out(w) ]
+
+//----------------------------------------------------------------------------------------
+// Generation of crs
+//----------------------------------------------------------------------------------------
+
+rule generate_crs:
+    [ Fr(~crs) ]
+  --[ HonestCRS(~crs) ]->
+    [ Out(~crs) ]
+    
+//----------------------------------------------------------------------------------------
+// Protocol initialization
+//----------------------------------------------------------------------------------------
+
+rule Init_P:
+	[ Fr(~id),
+	  !SecretWitness(P, w1),
+	  !SecretWitness(P, w2),
+	  !SecretWitness(P, w3),
+	  In(crs) ]
+  --[ Init_P(),
+      Create_P(P, ~id),
+      KnowsWitness(P, <w1,w2,w3>) ]->
+	[ St_P_1(P, ~id, crs, w1, w2, w3) ]
+  
+rule Init_V:
+	[ Fr(~id),
+	  In(crs) ]
+  --[ Init_V(),
+      Create_V($V, ~id) ]->
+	[ St_V_1($V, ~id, crs) ]
+
+//----------------------------------------------------------------------------------------
+// Protocol
+//----------------------------------------------------------------------------------------
+
+// 1. Prover
+
+rule P_1:
+	[ St_P_1(P, id, crs, w1, w2, w3),
+	  Fr(~r),
+	  Fr(~t1),
+	  Fr(~t3) ]
+  --[ CreatedZkp(P, <w1,w2,w3>, crs),
+      Honest(P) ]->
+	[ St_P_2(P, id, crs, w1, w2, w3, ~r),
+	  Out(zkp(crs, h(w1), h(w2), ~t3, w1, w2, w3, ~r))  // --> EVALUATES TO FALSE
+    ]
+
+// 2. Verifier
+
+rule V_1:
+	[ St_V_1(V, id, crs),
+	  In(zkp(crs, h(w1), h(w2), t3, w1, w2, w3, r))  // --> EVALUATES TO FALSE
+	]
+  --[ ReceivedZkp(V, id, <w1, w2, w3>, crs),
+      ValidZkp(crs, zkp(crs, h(w1), h(w2), t3, w1, w2, w3, r)),  // --> EVALUATES TO FALSE
+      VerifiedZkp(V, id, <w1, w2, w3>, crs),
+      Finish(V, id),
+      Honest(V) ]->
+	[]
+
+
+//----------------------------------------------------------------------------------------
+// Restrictions
+//----------------------------------------------------------------------------------------
+  
+
+restriction IsValidZkp:
+  "
+    All crs x1 x2 x3 w1 w2 w3 r #i. ValidZkp(crs, zkp(crs, x1, x2, x3, w1, w2, w3, r))@i
+      ==> ( (x1 = h(w1)) | (x2 = h(w2)) ) & ( (not x1 = h(w1)) | (x3 = h(w3)) )
+  "
+
+//----------------------------------------------------------------------------------------
+// Lemmas
+//----------------------------------------------------------------------------------------
+
+// 0. Protocol is executable
+lemma executable:
+  exists-trace
+    "
+     // A ZKP of an honest witness can be verified
+       (Ex P V id #i1 #i21 #i22 #i23 #i3 #i4 w1 w2 w3 crs.
+              HonestCRS(crs)@i1 &
+              HonestWitness(P, w1)@i21 &
+              HonestWitness(P, w2)@i22 &
+              HonestWitness(P, w3)@i23 &
+              CreatedZkp(P, <w1,w2,w3>, crs)@i3 & VerifiedZkp(V, id, <w1,w2,w3>, crs)@i4 &
+              i3 < i4
+       )
+     // Both P and V are only initiated once
+     & (All #i #j. Init_P()@i & Init_P()@j ==> #i = #j)
+     & (All #i #j. Init_V()@i & Init_V()@j ==> #i = #j)
+     // Protocol is executed between two parties
+     & (Ex A B idA idB #i #j. Create_P(A, idA)@i & Create_V(B, idB)@j & not A=B)
+     // The secret key of P was not compromised
+     & not (Ex A idA #i #j. Create_P(A, idA)@i & Reveal(A)@j)
+    "
+
+// 1. Soundness: P cannot trick V into verifying a false statement
+lemma soundness:
+  "
+   All V id #i1 #i2 w1 w2 w3 crs.
+   VerifiedZkp(V, id, <w1,w2,w3>, crs)@i1 & HonestCRS(crs)@i2
+     ==> ( Ex P #j. KnowsWitness(P, <w1,w2,w3>)@j )
+      | ( Ex P #j. Reveal(P)@j )
+      | ( Ex #j1 #j2 #j3. KU(w1)@j1 & KU(w2)@j2 & KU(w3)@j3 )
+  " 
+
+// 2. Completeness: V will always verify a true statement
+lemma completeness:
+  "
+   All V id w1 w2 w3 #i1 #i2 #i3 crs.
+   ( Ex P #j. KnowsWitness(P, <w1,w2,w3>)@j ) & ReceivedZkp(V, id, <w1,w2,w3>, crs)@i1 & HonestCRS(crs)@i2 & Finish(V, id)@i3
+     ==> ( Ex #k. VerifiedZkp(V, id, <w1,w2,w3>, crs)@k )
+  "
+
+// 3. Zero-knowledge:
+lemma zero_knowledge:
+  "
+   not(
+     Ex P w1 w2 w3 crs #i1 #i2.
+               HonestCRS(crs)@i1 &
+               CreatedZkp(P, <w1,w2,w3>, crs)@i2 &
+               ( (Ex #j. K(w1)@j) | (Ex #j. K(w2)@j) | (Ex #j. K(w3)@j) ) &
+               not (Ex #j. Reveal(P)@j)
+      )
+  "
+
+end
